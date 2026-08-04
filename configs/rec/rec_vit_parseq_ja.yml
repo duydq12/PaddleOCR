@@ -8,20 +8,19 @@ Global:
   # evaluation is run every 5000 iterations after the 4000th iteration
   eval_batch_step: [0, 500]
   cal_metric_during_train: True
-  pretrained_model: /home/ubuntu/H_project/ocr/PaddleOCR/weights/best_model/model
+  pretrained_model: /home/ubuntu/H_project/ocr/PaddleOCR2/weights/ja_09_01/best_accuracy
+#  pretrained_model:
   checkpoints:
   save_inference_dir:
   use_visualdl: False
-  infer_img: doc/imgs_words_en/word_10.png
+  infer_img: /tmp/R.jpeg
   # for data or label process
-  character_dict_path: /tmp/app/french-resources/paddleocr_french_dict.txt
-  # character_dict_path: /data/data-text-recognition/tr-resources/ja/vocab-jp_char+printable.txt
-  character_type: french
-  max_text_length: 25
+  character_dict_path: /data/data-text-recognition/tr-resources/ja/vocab-jp_char+printable.txt
+  character_type: japan
+  max_text_length: 10
   num_heads: 8
   infer_mode: False
   use_space_char: False
-  # use_space_char: True
   save_res_path: ./output/rec/predicts_parseq.txt
 
 
@@ -83,8 +82,7 @@ Train:
 #      - /tmp/app/french-data/ggfont-hw-augment/ppocr_train.txt
 #      - /tmp/app/french-data/ggfont/ppocr_train.txt
     name: LMDBDataSet
-    data_dir: /tmp/app/french-data-generated/lmdb-train
-    # data_dir: /data/data-text-recognition/ja-generated/ja-ggfont-unigram/train
+    data_dir: /data/data-text-recognition/ja-generated/ja-ggfont-unigram/train
     transforms:
       - DecodeImage: # load image
           img_mode: BGR
@@ -111,8 +109,7 @@ Eval:
 #      - /tmp/app/french-data/ggfont-hw-augment/ppocr_test.txt
 #      - /tmp/app/french-data/ggfont/ppocr_test.txt
     name: LMDBDataSet
-    data_dir: /tmp/app/french-data-generated/lmdb-test
-    # data_dir: /data/data-text-recognition/ja-generated/ja-ggfont-unigram/test
+    data_dir: /data/data-text-recognition/ja-generated/ja-ggfont-unigram/test
     transforms:
       - DecodeImage: # load image
           img_mode: BGR

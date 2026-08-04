@@ -8,20 +8,19 @@ Global:
   # evaluation is run every 5000 iterations after the 4000th iteration
   eval_batch_step: [0, 500]
   cal_metric_during_train: True
-  pretrained_model: /home/ubuntu/H_project/ocr/PaddleOCR/weights/best_model/model
+  pretrained_model: /home/ubuntu/H_project/ocr/PaddleOCR2/weights/latin_1801/best_accuracy
+#  pretrained_model:
   checkpoints:
   save_inference_dir:
   use_visualdl: False
-  infer_img: doc/imgs_words_en/word_10.png
+  infer_img: /home/ubuntu/Desktop/4.jpg
   # for data or label process
-  character_dict_path: /tmp/app/french-resources/paddleocr_french_dict.txt
-  # character_dict_path: /data/data-text-recognition/tr-resources/ja/vocab-jp_char+printable.txt
-  character_type: french
-  max_text_length: 25
+  character_dict_path: /data/data-text-recognition/tr-resources/latin/vocab-latin.txt
+  character_type: latin
+  max_text_length: 32
   num_heads: 8
   infer_mode: False
-  use_space_char: False
-  # use_space_char: True
+  use_space_char: True
   save_res_path: ./output/rec/predicts_parseq.txt
 
 
@@ -50,7 +49,7 @@ Architecture:
   Head:
     name: ParseQHead
     # Architecture
-    max_text_length: 25
+    max_text_length: 32
     embed_dim: 384
     dec_num_heads: 12
     dec_mlp_ratio: 4
@@ -77,20 +76,14 @@ Metric:
 
 Train:
   dataset:
-#    name: SimpleDataSet
-#    data_dir: /tmp/app/french-data/
-#    label_file_list:
-#      - /tmp/app/french-data/ggfont-hw-augment/ppocr_train.txt
-#      - /tmp/app/french-data/ggfont/ppocr_train.txt
     name: LMDBDataSet
-    data_dir: /tmp/app/french-data-generated/lmdb-train
-    # data_dir: /data/data-text-recognition/ja-generated/ja-ggfont-unigram/train
+    data_dir: /home/ubuntu/H_project/ocr/PaddleOCR2/data/train
     transforms:
       - DecodeImage: # load image
           img_mode: BGR
           channel_first: False
-      - ParseQRecAug:
-          aug_type: 0 # or 1
+      # - ParseQRecAug:
+          # aug_type: 0 # or 1
       - ParseQLabelEncode:
       - SVTRRecResizeImg:
           image_shape: [3, 32, 128]
@@ -105,14 +98,8 @@ Train:
 
 Eval:
   dataset:
-#    name: SimpleDataSet
-#    data_dir: /tmp/app/french-data/
-#    label_file_list:
-#      - /tmp/app/french-data/ggfont-hw-augment/ppocr_test.txt
-#      - /tmp/app/french-data/ggfont/ppocr_test.txt
     name: LMDBDataSet
-    data_dir: /tmp/app/french-data-generated/lmdb-test
-    # data_dir: /data/data-text-recognition/ja-generated/ja-ggfont-unigram/test
+    data_dir: /home/ubuntu/H_project/ocr/PaddleOCR2/data/test
     transforms:
       - DecodeImage: # load image
           img_mode: BGR
@@ -122,7 +109,7 @@ Eval:
           image_shape: [3, 32, 128]
           padding: False
       - KeepKeys:
-          keep_keys: ['image', 'label', 'length'] 
+          keep_keys: ['image', 'label', 'length']
   loader:
     shuffle: False
     drop_last: False

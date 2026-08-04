@@ -176,7 +176,10 @@ def load_model_torch(config, model):
 
     for name, param in params.items():
         # if isinstance(m, paddle.nn.Linear):
-        if any(item in name for item in ["mlp.fc", "attn.qkv", "linear", "head.head.weight"]):
+        if any(item in name for item in ["mlp.fc", "attn.qkv", "attn.proj",
+                                         "self_attn.q_proj","self_attn.k_proj","self_attn.v_proj","self_attn.out_proj",
+                                         "cross_attn.q_proj","cross_attn.k_proj","cross_attn.v_proj","cross_attn.out_proj",
+                                         "linear", "head.head.weight"]):
             params[name] = torch.from_numpy(param.numpy().T)
         else:
             params[name] = torch.from_numpy(param.numpy())

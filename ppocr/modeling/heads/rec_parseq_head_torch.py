@@ -19,6 +19,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import collections
 import copy
 import math
 from itertools import permutations
@@ -28,6 +29,161 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+
+
+def _convert_attention_mask(attn_mask, dtype):
+    if attn_mask is not None and attn_mask.dtype != dtype:
+        if attn_mask.dtype == torch.bool or attn_mask.dtype == torch.int:
+            attn_mask = (attn_mask.to(dtype) - 1.0) * 1e9
+        else:
+            attn_mask = attn_mask.to(dtype)
+    return attn_mask
+
+
+class MultiheadAttention(nn.Module):
+    Cache = collections.namedtuple("Cache", ["k", "v"])
+    StaticCache = collections.namedtuple("StaticCache", ["k", "v"])
+
+    def __init__(
+        self,
+        embed_dim,
+        num_heads,
+        dropout=0.0,
+        kdim=None,
+        vdim=None,
+        need_weights=True,
+        bias=True,
+    ):
+        super().__init__()
+
+        assert embed_dim > 0, (
+            "Expected embed_dim to be greater than 0, "
+            f"but received {embed_dim}"
+        )
+        assert num_heads > 0, (
+            "Expected num_heads to be greater than 0, "
+            f"but received {num_heads}"
+        )
+
+        self.embed_dim = embed_dim
+        self.kdim = kdim if kdim is not None else embed_dim
+        self.vdim = vdim if vdim is not None else embed_dim
+        self.num_heads = num_heads
+        self.dropout = dropout
+        self.need_weights = need_weights
+
+        self.head_dim = embed_dim // num_heads
+        assert (
+            self.head_dim * num_heads == self.embed_dim
+        ), "embed_dim must be divisible by num_heads"
+
+        self.q_proj = nn.Linear(
+            embed_dim, embed_dim, bias=bias
+        )
+        self.k_proj = nn.Linear(
+            self.kdim, embed_dim, bias=bias
+        )
+        self.v_proj = nn.Linear(
+            self.vdim, embed_dim, bias=bias
+        )
+        self.out_proj = nn.Linear(
+            embed_dim, embed_dim, bias=bias
+        )
+
+    def _prepare_qkv(self, query, key, value, cache=None):
+        q = self.q_proj(query)
+        q = torch.reshape(q, [q.shape[0], -1, self.num_heads, self.head_dim])
+        q = q.permute(0, 2, 1, 3)
+
+        if isinstance(cache, self.StaticCache):
+            # for encoder-decoder attention in inference and has cached
+            k, v = cache.k, cache.v
+        else:
+            k, v = self.compute_kv(key, value)
+
+        if isinstance(cache, self.Cache):
+            # for decoder self-attention in inference
+            k = torch.cat([cache.k, k], dim=2)
+            v = torch.cat([cache.v, v], dim=2)
+            cache = self.Cache(k, v)
+
+        return (q, k, v) if cache is None else (q, k, v, cache)
+
+    def compute_kv(self, key, value):
+        k = self.k_proj(key)
+        v = self.v_proj(value)
+        k = torch.reshape(k, [k.shape[0], -1, self.num_heads, self.head_dim])
+        k = k.permute(0, 2, 1, 3)
+        v = torch.reshape(v, [v.shape[0], -1, self.num_heads, self.head_dim])
+        v = v.permute(0, 2, 1, 3)
+        return k, v
+
+    def gen_cache(self, key, value=None, type=Cache):
+        if type == MultiheadAttention.StaticCache:  # static_kv
+            k, v = self.compute_kv(key, value)
+            return self.StaticCache(k, v)
+        elif value is None:  # incremental_state
+            fill_shape = (torch.shape(key)[0].item(), self.num_heads, 0, self.head_dim)
+            k = torch.full(fill_shape, fill_value=0, dtype=key.dtype)
+            v = torch.full(fill_shape, fill_value=0, dtype=key.dtype)
+            return self.Cache(k, v)
+        else:
+            # incremental_state with initial value, mainly for usage like UniLM
+            return self.Cache(key, value)
+
+    def forward(self, query, key=None, value=None, attn_mask=None, cache=None):
+        key = query if key is None else key
+        value = query if value is None else value
+        # compute q ,k ,v
+        if cache is None:
+            q, k, v = self._prepare_qkv(query, key, value, cache)
+        else:
+            q, k, v, cache = self._prepare_qkv(query, key, value, cache)
+
+        # scale dot product attention
+        product = torch.matmul(
+            q * (self.head_dim ** -0.5), k.transpose(-1, -2)
+        )
+        if attn_mask is not None:
+            # Support bool or int mask
+            attn_mask = _convert_attention_mask(attn_mask, product.dtype)
+            product = product + attn_mask
+        weights = F.softmax(product, dim=-1)
+        if self.dropout:
+            weights = F.dropout(
+                weights,
+                self.dropout,
+                training=self.training,
+            )
+
+        out = torch.matmul(weights, v)
+
+        # combine heads
+        out = out.permute(0, 2, 1, 3)
+        out = torch.reshape(out, [out.shape[0], -1, out.shape[2] * out.shape[3]])
+
+        # project to output
+        out = self.out_proj(out)
+
+        outs = [out]
+        if self.need_weights:
+            outs.append(weights)
+        if cache is not None:
+            outs.append(cache)
+        return out if len(outs) == 1 else tuple(outs)
+
+
+def create_combined_mask(tgt_mask, tgt_key_padding_mask):
+    # Create a boolean mask from tgt_mask
+    tgt_mask_bool = (tgt_mask != float("-inf")).unsqueeze(0).unsqueeze(1)
+
+    # Create a boolean mask from tgt_key_padding_mask
+    key_padding_mask_bool = (~tgt_key_padding_mask).unsqueeze(1).unsqueeze(2)
+
+    # Combine the masks
+    combined_mask = tgt_mask_bool & key_padding_mask_bool
+
+    return combined_mask
 
 
 class DecoderLayer(torch.nn.Module):
@@ -44,12 +200,20 @@ class DecoderLayer(torch.nn.Module):
         layer_norm_eps=1e-05,
     ):
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(
-            d_model, nhead, dropout=dropout, batch_first=True
+        # self.self_attn = nn.MultiheadAttention(
+        #     d_model, nhead, dropout=dropout, batch_first=True
+        # )  # paddle.nn.MultiHeadAttention默认为batch_first模式
+        # self.cross_attn = nn.MultiheadAttention(
+        #     d_model, nhead, dropout=dropout, batch_first=True
+        # )
+
+        self.self_attn = MultiheadAttention(
+            d_model, nhead, dropout=dropout
         )  # paddle.nn.MultiHeadAttention默认为batch_first模式
-        self.cross_attn = nn.MultiheadAttention(
-            d_model, nhead, dropout=dropout, batch_first=True
+        self.cross_attn = MultiheadAttention(
+            d_model, nhead, dropout=dropout
         )
+
         self.linear1 = nn.Linear(
             in_features=d_model, out_features=dim_feedforward
         )
@@ -89,9 +253,7 @@ class DecoderLayer(torch.nn.Module):
         memory is LayerNorm'd by ViT.
         """
         if tgt_key_padding_mask is not None:
-            tgt_mask1 = (tgt_mask != float("-inf"))[:, :] & (
-                tgt_key_padding_mask[:, :] == False
-            )
+            tgt_mask1 = create_combined_mask(tgt_mask, tgt_key_padding_mask)
             tgt2, sa_weights = self.self_attn(
                 tgt_norm, tgt_kv, tgt_kv, attn_mask=tgt_mask1
             )
@@ -151,7 +313,6 @@ class Decoder(torch.nn.Module):
     def __init__(self, decoder_layer, num_layers, norm):
         super().__init__()
         self.layers = get_clones(decoder_layer, num_layers)
-        # self.layers = transformer._get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
 
@@ -327,8 +488,8 @@ class ParseQHead(nn.Module):
                 logits.append(p_i)
                 if j < num_steps:
                     tgt_in[:, j] = p_i.squeeze().argmax(-1)
-                    if testing and (tgt_in == self.eos_id).any(dim=-1).all():
-                        break
+                    # if testing and (tgt_in == self.eos_id).any(dim=-1).all():
+                    #     break
             logits = torch.cat(logits, dim=1)
         else:
             tgt_in = torch.full((bs, 1), fill_value=self.bos_id, dtype=torch.long, device=self._device)

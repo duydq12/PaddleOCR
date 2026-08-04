@@ -313,7 +313,6 @@ class VisionTransformer(nn.Module):
         x = self.pos_drop(x)
         for blk in self.blocks:
             x = blk(x)
-            break
         x = self.norm(x)
         return x
 

@@ -14,6 +14,7 @@
 
 import numpy as np
 import paddle
+import torch
 from paddle.nn import functional as F
 import re
 
@@ -601,7 +602,7 @@ class ParseQLabelDecode(BaseRecLabelDecode):
         char_num = (
             len(self.character_str) + 1
         )  # We don't predict <bos> nor <pad>, with only addition <eos>
-        if isinstance(pred, paddle.Tensor):
+        if isinstance(pred, paddle.Tensor) or isinstance(pred, torch.Tensor):
             pred = pred.numpy()
         B, L = pred.shape[:2]
         pred = np.reshape(pred, [-1, char_num])

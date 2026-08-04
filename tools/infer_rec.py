@@ -41,7 +41,7 @@ from ppocr.utils.utility import get_image_file_list
 import tools.program as program
 
 
-def main():
+def main(save_torch=True):
     global_config = config["Global"]
 
     # build post process
@@ -96,6 +96,9 @@ def main():
 
     load_model(config, model)
     load_model_torch(config, model_torch)
+
+    if save_torch:
+        torch.save(model_torch.state_dict(), "../weights/latin_1801/best_model.pth")
 
     # create data ops
     transforms = []
@@ -170,6 +173,7 @@ def main():
                 )
                 label = paddle.ones((1, 36), dtype="int64")
             images = np.expand_dims(batch[0], axis=0)
+            np.save("/tmp/images.npy", images)
             images_torch = torch.from_numpy(images)
             images = paddle.to_tensor(images)
             if config["Architecture"]["algorithm"] == "SRN":
@@ -185,6 +189,10 @@ def main():
                 with torch.no_grad():
                     preds_torch = model_torch(images_torch)
             post_result = post_process_class(preds)
+            post_torch_result = post_process_class(preds_torch)
+            if post_torch_result[0][0] != post_result[0][0] or not np.allclose(post_result[0][1],
+                                                                               post_torch_result[0][1]):
+                print("Convert error")
             info = None
             if isinstance(post_result, dict):
                 rec_info = dict()
