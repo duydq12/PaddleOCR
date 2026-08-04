@@ -22,6 +22,7 @@ import pickle
 import six
 
 import paddle
+import torch
 
 from ppocr.utils.logging import get_logger
 from ppocr.utils.network import maybe_download_params
@@ -151,6 +152,86 @@ def load_model(config, model, optimizer=None, model_type="det"):
         is_float16 = load_pretrained_params(model, pretrained_model)
     else:
         logger.info("train from scratch")
+    best_model_dict["is_float16"] = is_float16
+    return best_model_dict
+
+
+def load_model_torch(config, model):
+    """
+    load model from checkpoint or pretrained_model
+    """
+    logger = get_logger()
+    global_config = config["Global"]
+    pretrained_model = global_config.get("pretrained_model")
+    best_model_dict = {}
+
+    path = pretrained_model
+    if path.endswith(".pdparams"):
+        path = path.replace(".pdparams", "")
+    assert os.path.exists(
+        path + ".pdparams"
+    ), "The {}.pdparams does not exists!".format(path)
+
+    params = paddle.load(path + ".pdparams")
+
+    for name, param in params.items():
+        # if isinstance(m, paddle.nn.Linear):
+        if any(item in name for item in ["mlp.fc", "attn.qkv", "linear", "head.head.weight"]):
+            params[name] = torch.from_numpy(param.numpy().T)
+        else:
+            params[name] = torch.from_numpy(param.numpy())
+
+    # Hotfix code
+    params['head.decoder.layers.0.self_attn.in_proj_weight'] = torch.cat(
+        [params['head.decoder.layers.0.self_attn.q_proj.weight'],
+         params['head.decoder.layers.0.self_attn.k_proj.weight'],
+         params['head.decoder.layers.0.self_attn.v_proj.weight']]
+    )
+    params['head.decoder.layers.0.self_attn.in_proj_bias'] = torch.cat(
+        [params['head.decoder.layers.0.self_attn.q_proj.bias'],
+         params['head.decoder.layers.0.self_attn.k_proj.bias'],
+         params['head.decoder.layers.0.self_attn.v_proj.bias']]
+    )
+    params['head.decoder.layers.0.cross_attn.in_proj_weight'] = torch.cat(
+        [params['head.decoder.layers.0.cross_attn.q_proj.weight'],
+         params['head.decoder.layers.0.cross_attn.k_proj.weight'],
+         params['head.decoder.layers.0.cross_attn.v_proj.weight']]
+    )
+    params['head.decoder.layers.0.cross_attn.in_proj_bias'] = torch.cat(
+        [params['head.decoder.layers.0.cross_attn.q_proj.bias'],
+         params['head.decoder.layers.0.cross_attn.k_proj.bias'],
+         params['head.decoder.layers.0.cross_attn.v_proj.bias']]
+    )
+
+    state_dict = model.state_dict()
+
+    new_state_dict = {}
+    is_float16 = False
+
+    for k1 in params.keys():
+        if k1 not in state_dict.keys():
+            logger.warning("The pretrained params {} not in model".format(k1))
+        else:
+            if params[k1].dtype == paddle.float16:
+                is_float16 = True
+            if params[k1].dtype != state_dict[k1].dtype:
+                params[k1] = params[k1].astype(state_dict[k1].dtype)
+            if list(state_dict[k1].shape) == list(params[k1].shape):
+                new_state_dict[k1] = params[k1]
+            else:
+                logger.warning(
+                    "The shape of model params {} {} not matched with loaded params {} {} !".format(
+                        k1, state_dict[k1].shape, k1, params[k1].shape
+                    )
+                )
+
+    model.load_state_dict(new_state_dict)
+    if is_float16:
+        logger.info(
+            "The parameter type is float16, which is converted to float32 when loading"
+        )
+    logger.info("load pretrain successful from {}".format(path))
+
     best_model_dict["is_float16"] = is_float16
     return best_model_dict
 

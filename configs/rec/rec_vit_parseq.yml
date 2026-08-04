@@ -1,5 +1,5 @@
 Global:
-  use_gpu: True
+  use_gpu: False
   epoch_num: 20
   log_smooth_window: 20
   print_batch_step: 5
@@ -8,14 +8,14 @@ Global:
   # evaluation is run every 5000 iterations after the 4000th iteration
   eval_batch_step: [0, 500]
   cal_metric_during_train: True
-  pretrained_model: 
+  pretrained_model: /home/ubuntu/H_project/ocr/PaddleOCR/weights/best_model/model
   checkpoints:
   save_inference_dir:
   use_visualdl: False
   infer_img: doc/imgs_words_en/word_10.png
   # for data or label process
-  character_dict_path: ppocr/utils/dict/parseq_dict.txt
-  character_type: en
+  character_dict_path: /tmp/app/french-resources/paddleocr_french_dict.txt
+  character_type: french
   max_text_length: 25
   num_heads: 8
   infer_mode: False
@@ -75,8 +75,13 @@ Metric:
 
 Train:
   dataset:
+#    name: SimpleDataSet
+#    data_dir: /tmp/app/french-data/
+#    label_file_list:
+#      - /tmp/app/french-data/ggfont-hw-augment/ppocr_train.txt
+#      - /tmp/app/french-data/ggfont/ppocr_train.txt
     name: LMDBDataSet
-    data_dir:
+    data_dir: /tmp/app/french-data-generated/lmdb-train
     transforms:
       - DecodeImage: # load image
           img_mode: BGR
@@ -93,12 +98,17 @@ Train:
     shuffle: True
     batch_size_per_card: 192
     drop_last: True
-    num_workers: 4
+    num_workers: 1
 
 Eval:
   dataset:
+#    name: SimpleDataSet
+#    data_dir: /tmp/app/french-data/
+#    label_file_list:
+#      - /tmp/app/french-data/ggfont-hw-augment/ppocr_test.txt
+#      - /tmp/app/french-data/ggfont/ppocr_test.txt
     name: LMDBDataSet
-    data_dir:
+    data_dir: /tmp/app/french-data-generated/lmdb-test
     transforms:
       - DecodeImage: # load image
           img_mode: BGR
@@ -113,4 +123,4 @@ Eval:
     shuffle: False
     drop_last: False
     batch_size_per_card: 384
-    num_workers: 4
+    num_workers: 1

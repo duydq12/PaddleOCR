@@ -23,6 +23,9 @@ import sys
 import json
 
 __dir__ = os.path.dirname(os.path.abspath(__file__))
+
+import torch
+
 sys.path.append(__dir__)
 sys.path.insert(0, os.path.abspath(os.path.join(__dir__, "..")))
 
@@ -31,9 +34,9 @@ os.environ["FLAGS_allocator_strategy"] = "auto_growth"
 import paddle
 
 from ppocr.data import create_operators, transform
-from ppocr.modeling.architectures import build_model
+from ppocr.modeling.architectures import build_model, build_model_torch
 from ppocr.postprocess import build_post_process
-from ppocr.utils.save_load import load_model
+from ppocr.utils.save_load import load_model, load_model_torch
 from ppocr.utils.utility import get_image_file_list
 import tools.program as program
 
@@ -89,8 +92,10 @@ def main():
         config["Architecture"]["Head"]["is_export"] = True
 
     model = build_model(config["Architecture"])
+    model_torch = build_model_torch(config["Architecture"])
 
     load_model(config, model)
+    load_model_torch(config, model_torch)
 
     # create data ops
     transforms = []
@@ -126,6 +131,7 @@ def main():
         os.makedirs(os.path.dirname(save_res_path))
 
     model.eval()
+    model_torch.eval()
 
     infer_imgs = config["Global"]["infer_img"]
     infer_list = config["Global"].get("infer_list", None)
@@ -164,6 +170,7 @@ def main():
                 )
                 label = paddle.ones((1, 36), dtype="int64")
             images = np.expand_dims(batch[0], axis=0)
+            images_torch = torch.from_numpy(images)
             images = paddle.to_tensor(images)
             if config["Architecture"]["algorithm"] == "SRN":
                 preds = model(images, others)
@@ -175,6 +182,8 @@ def main():
                 preds = model([images, image_mask, label])
             else:
                 preds = model(images)
+                with torch.no_grad():
+                    preds_torch = model_torch(images_torch)
             post_result = post_process_class(preds)
             info = None
             if isinstance(post_result, dict):

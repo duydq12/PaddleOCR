@@ -18,16 +18,27 @@ import importlib
 from paddle.jit import to_static
 from paddle.static import InputSpec
 
-from .base_model import BaseModel
+from .base_model import BaseModel, BaseModelTorch
 from .distillation_model import DistillationModel
 
-__all__ = ["build_model", "apply_to_static"]
+__all__ = ["build_model", "build_model_torch", "apply_to_static"]
 
 
 def build_model(config):
     config = copy.deepcopy(config)
     if not "name" in config:
         arch = BaseModel(config)
+    else:
+        name = config.pop("name")
+        mod = importlib.import_module(__name__)
+        arch = getattr(mod, name)(config)
+    return arch
+
+
+def build_model_torch(config):
+    config = copy.deepcopy(config)
+    if not "name" in config:
+        arch = BaseModelTorch(config)
     else:
         name = config.pop("name")
         mod = importlib.import_module(__name__)

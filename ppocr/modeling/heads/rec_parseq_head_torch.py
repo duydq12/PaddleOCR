@@ -19,20 +19,18 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import math
-import paddle
-from paddle import nn, ParamAttr
-from paddle.nn import functional as F
-import numpy as np
-from .self_attention import WrapEncoderForFeature
-from .self_attention import WrapEncoder
-from collections import OrderedDict
-from typing import Optional
 import copy
+import math
 from itertools import permutations
+from typing import Optional
+
+import numpy as np
+import torch
+from torch import nn
+from torch.nn import functional as F
 
 
-class DecoderLayer(paddle.nn.Layer):
+class DecoderLayer(torch.nn.Module):
     """A Transformer decoder layer supporting two-stream attention (XLNet)
     This implements a pre-LN decoder, as opposed to the post-LN default in PyTorch."""
 
@@ -46,40 +44,40 @@ class DecoderLayer(paddle.nn.Layer):
         layer_norm_eps=1e-05,
     ):
         super().__init__()
-        self.self_attn = paddle.nn.MultiHeadAttention(
-            d_model, nhead, dropout=dropout, need_weights=True
+        self.self_attn = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
         )  # paddle.nn.MultiHeadAttention默认为batch_first模式
-        self.cross_attn = paddle.nn.MultiHeadAttention(
-            d_model, nhead, dropout=dropout, need_weights=True
+        self.cross_attn = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
         )
-        self.linear1 = paddle.nn.Linear(
+        self.linear1 = nn.Linear(
             in_features=d_model, out_features=dim_feedforward
         )
-        self.dropout = paddle.nn.Dropout(p=dropout)
-        self.linear2 = paddle.nn.Linear(
+        self.dropout = nn.Dropout(p=dropout)
+        self.linear2 = nn.Linear(
             in_features=dim_feedforward, out_features=d_model
         )
-        self.norm1 = paddle.nn.LayerNorm(
-            normalized_shape=d_model, epsilon=layer_norm_eps
+        self.norm1 = nn.LayerNorm(
+            normalized_shape=d_model, eps=layer_norm_eps
         )
-        self.norm2 = paddle.nn.LayerNorm(
-            normalized_shape=d_model, epsilon=layer_norm_eps
+        self.norm2 = nn.LayerNorm(
+            normalized_shape=d_model, eps=layer_norm_eps
         )
-        self.norm_q = paddle.nn.LayerNorm(
-            normalized_shape=d_model, epsilon=layer_norm_eps
+        self.norm_q = nn.LayerNorm(
+            normalized_shape=d_model, eps=layer_norm_eps
         )
-        self.norm_c = paddle.nn.LayerNorm(
-            normalized_shape=d_model, epsilon=layer_norm_eps
+        self.norm_c = nn.LayerNorm(
+            normalized_shape=d_model, eps=layer_norm_eps
         )
-        self.dropout1 = paddle.nn.Dropout(p=dropout)
-        self.dropout2 = paddle.nn.Dropout(p=dropout)
-        self.dropout3 = paddle.nn.Dropout(p=dropout)
+        self.dropout1 = nn.Dropout(p=dropout)
+        self.dropout2 = nn.Dropout(p=dropout)
+        self.dropout3 = nn.Dropout(p=dropout)
         if activation == "gelu":
-            self.activation = paddle.nn.GELU()
+            self.activation = nn.GELU()
 
     def __setstate__(self, state):
         if "activation" not in state:
-            state["activation"] = paddle.nn.functional.gelu
+            state["activation"] = F.gelu
         super().__setstate__(state)
 
     def forward_stream(
@@ -91,8 +89,8 @@ class DecoderLayer(paddle.nn.Layer):
         memory is LayerNorm'd by ViT.
         """
         if tgt_key_padding_mask is not None:
-            tgt_mask1 = (tgt_mask != float("-inf"))[None, None, :, :] & (
-                tgt_key_padding_mask[:, None, None, :] == False
+            tgt_mask1 = (tgt_mask != float("-inf"))[:, :] & (
+                tgt_key_padding_mask[:, :] == False
             )
             tgt2, sa_weights = self.self_attn(
                 tgt_norm, tgt_kv, tgt_kv, attn_mask=tgt_mask1
@@ -144,15 +142,16 @@ class DecoderLayer(paddle.nn.Layer):
 
 
 def get_clones(module, N):
-    return paddle.nn.LayerList([copy.deepcopy(module) for i in range(N)])
+    return torch.nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-class Decoder(paddle.nn.Layer):
+class Decoder(torch.nn.Module):
     __constants__ = ["norm"]
 
     def __init__(self, decoder_layer, num_layers, norm):
         super().__init__()
         self.layers = get_clones(decoder_layer, num_layers)
+        # self.layers = transformer._get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
 
@@ -161,9 +160,9 @@ class Decoder(paddle.nn.Layer):
         query,
         content,
         memory,
-        query_mask: Optional[paddle.Tensor] = None,
-        content_mask: Optional[paddle.Tensor] = None,
-        content_key_padding_mask: Optional[paddle.Tensor] = None,
+        query_mask: Optional[torch.Tensor] = None,
+        content_mask: Optional[torch.Tensor] = None,
+        content_key_padding_mask: Optional[torch.Tensor] = None,
     ):
         for i, mod in enumerate(self.layers):
             last = i == len(self.layers) - 1
@@ -180,34 +179,19 @@ class Decoder(paddle.nn.Layer):
         return query
 
 
-class TokenEmbedding(paddle.nn.Layer):
+class TokenEmbedding(nn.Module):
     def __init__(self, charset_size: int, embed_dim: int):
         super().__init__()
-        self.embedding = paddle.nn.Embedding(
+        self.embedding = nn.Embedding(
             num_embeddings=charset_size, embedding_dim=embed_dim
         )
         self.embed_dim = embed_dim
 
-    def forward(self, tokens: paddle.Tensor):
-        return math.sqrt(self.embed_dim) * self.embedding(tokens.astype(paddle.int64))
+    def forward(self, tokens: torch.Tensor):
+        return math.sqrt(self.embed_dim) * self.embedding(tokens.type(torch.int64))
 
 
-def trunc_normal_init(param, **kwargs):
-    initializer = nn.initializer.TruncatedNormal(**kwargs)
-    initializer(param, param.block)
-
-
-def constant_init(param, **kwargs):
-    initializer = nn.initializer.Constant(**kwargs)
-    initializer(param, param.block)
-
-
-def kaiming_normal_init(param, **kwargs):
-    initializer = nn.initializer.KaimingNormal(**kwargs)
-    initializer(param, param.block)
-
-
-class ParseQHead(nn.Layer):
+class ParseQHead(nn.Module):
     def __init__(
         self,
         out_channels,
@@ -239,47 +223,43 @@ class ParseQHead(nn.Layer):
         self.decoder = Decoder(
             decoder_layer,
             num_layers=dec_depth,
-            norm=paddle.nn.LayerNorm(normalized_shape=embed_dim),
+            norm=torch.nn.LayerNorm(normalized_shape=embed_dim),
         )
         self.rng = np.random.default_rng()
         self.max_gen_perms = perm_num // 2 if perm_mirrored else perm_num
         self.perm_forward = perm_forward
         self.perm_mirrored = perm_mirrored
-        self.head = paddle.nn.Linear(
+        self.head = nn.Linear(
             in_features=embed_dim, out_features=out_channels - 2
         )
         self.text_embed = TokenEmbedding(out_channels, embed_dim)
-        self.pos_queries = paddle.create_parameter(
-            shape=paddle.empty(shape=[1, max_text_length + 1, embed_dim]).shape,
-            dtype=paddle.empty(shape=[1, max_text_length + 1, embed_dim]).numpy().dtype,
-            default_initializer=paddle.nn.initializer.Assign(
-                paddle.empty(shape=[1, max_text_length + 1, embed_dim])
-            ),
+        self.pos_queries = nn.Parameter(
+            torch.Tensor(1, max_text_length + 1, embed_dim),
         )
         self.pos_queries.stop_gradient = not True
-        self.dropout = paddle.nn.Dropout(p=dropout)
-        self._device = self.parameters()[0].place
-        trunc_normal_init(self.pos_queries, std=0.02)
+        self.dropout = torch.nn.Dropout(p=dropout)
+        self._device = next(self.parameters(recurse=False)).device
+        nn.init.trunc_normal_(self.pos_queries, std=0.02)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, paddle.nn.Linear):
-            trunc_normal_init(m.weight, std=0.02)
+        if isinstance(m, torch.nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
-                constant_init(m.bias, value=0.0)
-        elif isinstance(m, paddle.nn.Embedding):
-            trunc_normal_init(m.weight, std=0.02)
-            if m._padding_idx is not None:
-                m.weight.data[m._padding_idx].zero_()
-        elif isinstance(m, paddle.nn.Conv2D):
-            kaiming_normal_init(m.weight, fan_in=None, nonlinearity="relu")
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, torch.nn.Embedding):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.padding_idx is not None:
+                m.weight.data[m.padding_idx].zero_()
+        elif isinstance(m, torch.nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             if m.bias is not None:
-                constant_init(m.bias, value=0.0)
+                nn.init.zeros_(m.bias)
         elif isinstance(
-            m, (paddle.nn.LayerNorm, paddle.nn.BatchNorm2D, paddle.nn.GroupNorm)
+            m, (torch.nn.LayerNorm, torch.nn.BatchNorm2d, torch.nn.GroupNorm)
         ):
-            constant_init(m.weight, value=1.0)
-            constant_init(m.bias, value=0.0)
+            nn.init.ones_(m.weight)
+            nn.init.zeros_(m.bias)
 
     def no_weight_decay(self):
         param_names = {"text_embed.embedding.weight", "pos_queries"}
@@ -302,11 +282,11 @@ class ParseQHead(nn.Layer):
         null_ctx = self.text_embed(tgt[:, :1])
         if L != 1:
             tgt_emb = self.pos_queries[:, : L - 1] + self.text_embed(tgt[:, 1:])
-            tgt_emb = self.dropout(paddle.concat(x=[null_ctx, tgt_emb], axis=1))
+            tgt_emb = self.dropout(torch.cat([null_ctx, tgt_emb], dim=1))
         else:
             tgt_emb = self.dropout(null_ctx)
         if tgt_query is None:
-            tgt_query = self.pos_queries[:, :L].expand(shape=[N, -1, -1])
+            tgt_query = self.pos_queries[:, :L].expand(N, -1, -1)
         tgt_query = self.dropout(tgt_query)
         return self.decoder(
             tgt_query, tgt_emb, memory, tgt_query_mask, tgt_mask, tgt_padding_mask
@@ -322,19 +302,19 @@ class ParseQHead(nn.Layer):
         bs = memory.shape[0]
         num_steps = max_length + 1
 
-        pos_queries = self.pos_queries[:, :num_steps].expand(shape=[bs, -1, -1])
-        tgt_mask = query_mask = paddle.triu(
-            x=paddle.full(shape=(num_steps, num_steps), fill_value=float("-inf")),
+        pos_queries = self.pos_queries[:, :num_steps].expand([bs, -1, -1])
+        tgt_mask = query_mask = torch.triu(
+            torch.full((num_steps, num_steps), fill_value=float("-inf"), device=self._device),
             diagonal=1,
         )
+        # tgt_mask = query_mask = torch.triu(torch.ones((num_steps, num_steps), dtype=torch.bool, device=self._device), 1)
+
         if self.decode_ar:
-            tgt_in = paddle.full(shape=(bs, num_steps), fill_value=self.pad_id).astype(
-                "int64"
-            )
-            tgt_in[:, (0)] = self.bos_id
+            tgt_in = torch.full((bs, num_steps), fill_value=self.pad_id, dtype=torch.long, device=self._device)
+            tgt_in[:, 0] = self.bos_id
 
             logits = []
-            for i in range(paddle.to_tensor(num_steps)):
+            for i in range(torch.as_tensor(num_steps)):
                 j = i + 1
                 tgt_out = self.decode(
                     tgt_in[:, :j],
@@ -346,37 +326,33 @@ class ParseQHead(nn.Layer):
                 p_i = self.head(tgt_out)
                 logits.append(p_i)
                 if j < num_steps:
-                    tgt_in[:, (j)] = p_i.squeeze().argmax(axis=-1)
-                    if (
-                        testing
-                        and (tgt_in == self.eos_id)
-                        .astype("bool")
-                        .any(axis=-1)
-                        .astype("bool")
-                        .all()
-                    ):
+                    tgt_in[:, j] = p_i.squeeze().argmax(-1)
+                    if testing and (tgt_in == self.eos_id).any(dim=-1).all():
                         break
-            logits = paddle.concat(x=logits, axis=1)
+            logits = torch.cat(logits, dim=1)
         else:
-            tgt_in = paddle.full(shape=(bs, 1), fill_value=self.bos_id).astype("int64")
+            tgt_in = torch.full((bs, 1), fill_value=self.bos_id, dtype=torch.long, device=self._device)
             tgt_out = self.decode(tgt_in, memory, tgt_query=pos_queries)
             logits = self.head(tgt_out)
         if self.refine_iters:
-            temp = paddle.triu(
-                x=paddle.ones(shape=[num_steps, num_steps], dtype="bool"), diagonal=2
-            )
-            posi = np.where(temp.cpu().numpy() == True)
-            query_mask[posi] = 0
-            bos = paddle.full(shape=(bs, 1), fill_value=self.bos_id).astype("int64")
+            # temp = torch.triu(
+            #     torch.ones(num_steps, num_steps, dtype=torch.bool, device=self._device), diagonal=2
+            # )
+            # posi = np.where(temp.cpu().numpy() == True)
+            # query_mask[posi] = 0
+
+            query_mask[torch.triu(torch.ones(num_steps, num_steps, dtype=torch.bool, device=self._device), 2)] = 0
+            bos = torch.full((bs, 1), fill_value=self.bos_id, dtype=torch.long, device=self._device)
             for i in range(self.refine_iters):
-                tgt_in = paddle.concat(x=[bos, logits[:, :-1].argmax(axis=-1)], axis=1)
-                tgt_padding_mask = (tgt_in == self.eos_id).astype(dtype="int32")
-                tgt_padding_mask = tgt_padding_mask.cpu()
-                tgt_padding_mask = tgt_padding_mask.cumsum(axis=-1) > 0
-                tgt_padding_mask = (
-                    # tgt_padding_mask.cuda().astype(dtype="float32") == 1.0
-                    tgt_padding_mask.astype(dtype="float32") == 1.0
-                )
+                tgt_in = torch.cat([bos, logits[:, :-1].argmax(-1)], dim=1)
+                # tgt_padding_mask = (tgt_in == self.eos_id).type(dtype="int32")
+                # tgt_padding_mask = tgt_padding_mask.cpu()
+                # tgt_padding_mask = tgt_padding_mask.cumsum(dim=-1) > 0
+                tgt_padding_mask = (tgt_in == self.eos_id).int().cumsum(-1) > 0
+                # tgt_padding_mask = (
+                #     # tgt_padding_mask.cuda().astype(dtype="float32") == 1.0
+                #     tgt_padding_mask.type(dtype="float32") == 1.0
+                # )
                 tgt_out = self.decode(
                     tgt_in,
                     memory,
@@ -388,7 +364,7 @@ class ParseQHead(nn.Layer):
                 logits = self.head(tgt_out)
 
         # transfer to probility
-        logits = F.softmax(logits, axis=-1)
+        logits = F.softmax(logits, dim=-1)
 
         final_output = {"predict": logits}
 
@@ -401,8 +377,8 @@ class ParseQHead(nn.Layer):
         """
         max_num_chars = tgt.shape[1] - 2
         if max_num_chars == 1:
-            return paddle.arange(end=3).unsqueeze(axis=0)
-        perms = [paddle.arange(end=max_num_chars)] if self.perm_forward else []
+            return torch.arange(end=3, device=self._device).unsqueeze(dim=0)
+        perms = [torch.arange(end=max_num_chars, device=self._device)] if self.perm_forward else []
         max_perms = math.factorial(max_num_chars)
         if self.perm_mirrored:
             max_perms //= 2
@@ -412,40 +388,39 @@ class ParseQHead(nn.Layer):
                 selector = [0, 3, 4, 6, 9, 10, 12, 16, 17, 18, 19, 21]
             else:
                 selector = list(range(max_perms))
-            perm_pool = paddle.to_tensor(
-                data=list(permutations(range(max_num_chars), max_num_chars)),
-                place=self._device,
+            perm_pool = torch.as_tensor(
+                list(permutations(range(max_num_chars), max_num_chars)),
+                device=self._device,
             )[selector]
             if self.perm_forward:
                 perm_pool = perm_pool[1:]
-            perms = paddle.stack(x=perms)
+            perms = torch.stack(perms)
             if len(perm_pool):
                 i = self.rng.choice(
                     len(perm_pool), size=num_gen_perms - len(perms), replace=False
                 )
-                perms = paddle.concat(x=[perms, perm_pool[i]])
+                perms = torch.cat([perms, perm_pool[i]])
         else:
             perms.extend(
                 [
-                    paddle.randperm(n=max_num_chars)
+                    torch.randperm(max_num_chars, device=self._device)
                     for _ in range(num_gen_perms - len(perms))
                 ]
             )
-            perms = paddle.stack(x=perms)
+            perms = torch.stack(perms)
         if self.perm_mirrored:
-            comp = perms.flip(axis=-1)
-            x = paddle.stack(x=[perms, comp])
-            perm_2 = list(range(x.ndim))
-            perm_2[0] = 1
-            perm_2[1] = 0
-            perms = x.transpose(perm=perm_2).reshape((-1, max_num_chars))
-        bos_idx = paddle.zeros(shape=(len(perms), 1), dtype=perms.dtype)
-        eos_idx = paddle.full(
-            shape=(len(perms), 1), fill_value=max_num_chars + 1, dtype=perms.dtype
-        )
-        perms = paddle.concat(x=[bos_idx, perms + 1, eos_idx], axis=1)
+            comp = perms.flip(-1)
+            # x = torch.stack(tensors=[perms, comp])
+            # perm_2 = list(range(x.ndim))
+            # perm_2[0] = 1
+            # perm_2[1] = 0
+            # perms = x.transpose(perm_2[0], perm_2[1]).reshape((-1, max_num_chars))
+            perms = torch.stack([perms, comp]).transpose(0, 1).reshape(-1, max_num_chars)
+        bos_idx = perms.new_zeros((len(perms), 1))
+        eos_idx = perms.new_full((len(perms), 1), max_num_chars + 1)
+        perms = torch.cat([bos_idx, perms + 1, eos_idx], dim=1)
         if len(perms) > 1:
-            perms[(1), 1:] = max_num_chars + 1 - paddle.arange(end=max_num_chars + 1)
+            perms[1, 1:] = max_num_chars + 1 - torch.arange(end=max_num_chars + 1, device=self._device)
         return perms
 
     def generate_attn_masks(self, perm):
@@ -454,15 +429,15 @@ class ParseQHead(nn.Layer):
         :return: lookahead attention masks
         """
         sz = perm.shape[0]
-        mask = paddle.zeros(shape=(sz, sz))
+        mask = torch.zeros((sz, sz), device=self._device)
         for i in range(sz):
-            query_idx = perm[i].cpu().numpy().tolist()
-            masked_keys = perm[i + 1 :].cpu().numpy().tolist()
+            query_idx = perm[i]
+            masked_keys = perm[i + 1:]
             if len(masked_keys) == 0:
                 break
             mask[query_idx, masked_keys] = float("-inf")
         content_mask = mask[:-1, :-1].clone()
-        mask[paddle.eye(num_rows=sz).astype("bool")] = float("-inf")
+        mask[torch.eye(sz, dtype=torch.bool, device=self._device)] = float("-inf")
         query_mask = mask[1:, :-1]
         return content_mask, query_mask
 
@@ -480,7 +455,7 @@ class ParseQHead(nn.Layer):
             logits = self.head(out)
             if i == 0:
                 final_out["predict"] = logits
-            logits = logits.flatten(stop_axis=1)
+            logits = logits.flatten(end_dim=1)
             logits_list.append(logits)
 
         final_out["logits_list"] = logits_list
@@ -496,7 +471,7 @@ class ParseQHead(nn.Layer):
         if self.training:
             label = targets[0]  # label
             label_len = targets[1]
-            max_step = int(paddle.max(label_len).cpu().numpy()) + 2
+            max_step = torch.max(label_len).cpu().numpy()[0] + 2
             crop_label = label[:, :max_step]
             final_out = self.forward_train(feat, crop_label)
         else:
